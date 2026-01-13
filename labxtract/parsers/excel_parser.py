@@ -107,10 +107,14 @@ class ExcelLabParser:
     
     def _parse_sheet(self, df: pd.DataFrame, sheet_name: str, filename: str) -> Optional[LabReport]:
         """Парсит один лист Excel"""
-        # Извлекаем информацию о пациенте из названия листа
+        # ИЗМЕНЕНИЕ: Теперь используем имя файла для извлечения данных пациента
         patient = PatientInfo()
-        patient.from_sheet_name(sheet_name)
-        
+    
+        # Пробуем извлечь из имени файла
+        if not patient.from_filename(filename):
+            # Если не получилось из файла, пробуем из названия листа (обратная совместимость)
+            patient.from_sheet_name(sheet_name)
+    
         # Создаем отчет
         report = LabReport(
             patient=patient,
@@ -454,3 +458,10 @@ class ExcelLabParser:
                 return category
         
         return TestCategory.OTHER
+    
+    def get_internal_methods(self):
+        """Возвращает доступ к внутренним методам для использования в движке"""
+        return {
+            '_find_and_parse_table': self._find_and_parse_table,
+            '_create_test_from_data': self._create_test_from_data,
+        }

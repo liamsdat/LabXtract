@@ -1,0 +1,18 @@
+data_source:
+  # Откуда брать данные о пациенте:
+  # 'filename' - из имени файла (рекомендуется)
+  # 'sheet_name' - из названия листа
+  # 'auto' - сначала filename, потом sheet_name
+  patient_info_source: 'auto'
+  
+  # Шаблоны имен файлов:
+  filename_patterns:
+    - "{last_name} {first_name} {middle_name} {birth_date}.{ext}"
+    - "{last_name} {first_name} {birth_date}.{ext}"
+    - "{last_name} {first_name[0]}.{middle_name[0]}. {birth_date}.{ext}"
+  
+  # Форматы даты в имени файла:
+  date_formats:
+    - "%d.%m.%Y"   # 25.04.2005
+    - "%d-%m-%Y"   # 25-04-2005
+    - "%Y.%m.%d"   # 2005.04.25

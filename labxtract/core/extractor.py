@@ -9,10 +9,9 @@ import json
 import logging
 from datetime import datetime
 
-# Используем абсолютные импорты
-from labxtract.core.models import LabReport
-from labxtract.parsers.excel_parser import ExcelLabParser
-from labxtract.core.normalizer import DataNormalizer
+from .models import LabReport, PatientInfo
+from ..parsers.excel_parser import ExcelLabParser
+from .normalizer import DataNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +45,21 @@ class LabXtractEngine:
         logger.info(f"Начинаю обработку файла: {file_path}")
         
         try:
-            # 1. Парсим файл
+            # 1. Определяем источник данных из конфига
+            patient_source = self.config.get('data_source', {}).get('patient_info_source', 'auto')
+            
+            # 2. Парсим файл
             raw_reports = self.parser.parse_file(file_path)
             
             if not raw_reports:
                 logger.warning(f"Не удалось извлечь данные из файла: {file_path}")
                 return []
             
-            # 2. Нормализуем каждый отчет
+            # 3. Обновляем информацию о пациенте в зависимости от источника
+            if patient_source != 'auto':
+                self._update_patient_source(raw_reports, file_path, patient_source)
+            
+            # 4. Нормализуем каждый отчет
             normalized_reports = []
             for report in raw_reports:
                 self.normalizer.normalize_report(report)
@@ -65,6 +71,18 @@ class LabXtractEngine:
         except Exception as e:
             logger.error(f"Ошибка при обработке файла {file_path}: {e}")
             raise
+    
+    def _update_patient_source(self, reports: List[LabReport], file_path: Path, source: str):
+        """Обновляет источник данных пациента в отчетах"""
+        for report in reports:
+            if source == 'filename':
+                # Пробуем извлечь из имени файла
+                patient_from_file = PatientInfo()
+                if patient_from_file.from_filename(file_path.name):
+                    if patient_from_file.full_name:
+                        report.patient = patient_from_file
+                        logger.debug(f"Обновлен пациент из имени файла: {patient_from_file.full_name}")
+            # Для 'sheet_name' оставляем как есть (уже извлечено парсером)
     
     def process_directory(self, directory_path: Path) -> List[LabReport]:
         """
@@ -250,6 +268,9 @@ class LabXtractEngine:
     def _load_config(self, config_path: Optional[Path]) -> Dict[str, Any]:
         """Загружает конфигурацию из файла"""
         default_config = {
+            'data_source': {
+                'patient_info_source': 'auto'
+            },
             'parser': {
                 'max_rows_to_check': 20,
                 'date_formats': ['%d.%m.%Y', '%d/%m/%Y', '%Y-%m-%d']

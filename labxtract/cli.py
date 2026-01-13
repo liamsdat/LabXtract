@@ -11,6 +11,7 @@ from datetime import datetime
 
 # Используем абсолютные импорты
 from labxtract.core.extractor import LabXtractEngine
+from labxtract.core.models import PatientInfo  # ✅ ДОБАВЛЯЕМ ЭТОТ ИМПОРТ
 
 # Настройка логирования
 logging.basicConfig(
@@ -34,28 +35,52 @@ def cli():
 
 @cli.command()
 @click.argument('input_path', type=click.Path(exists=True))
-@click.option('--output', '-o', default='./labxtract_output', 
-              help='Путь для сохранения результатов')
-@click.option('--format', '-f', default='csv', 
-              type=click.Choice(['csv', 'json', 'excel', 'all']),
-              help='Формат вывода')
-@click.option('--config', '-c', type=click.Path(exists=True),
-              help='Путь к файлу конфигурации')
-@click.option('--verbose', '-v', is_flag=True,
-              help='Подробный вывод')
-def parse(input_path, output, format, config, verbose):
+@click.option('--output', '-o', default='./labxtract_output')
+@click.option('--format', '-f', default='csv')
+@click.option('--config', '-c', type=click.Path(exists=True))
+@click.option('--verbose', '-v', is_flag=True)
+@click.option('--patient-source', '-ps', 
+              type=click.Choice(['filename', 'sheet_name', 'auto']),
+              default='auto',
+              help='Источник данных о пациенте')
+def parse(input_path, output, format, config, verbose, patient_source):
     """
     Парсинг Excel файлов с лабораторными анализами
-    
-    INPUT_PATH: Путь к файлу или директории с Excel файлами
     """
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    logger.info(f"Запуск парсинга: {input_path}")
+    # === Создаем конфиг с настройкой источника данных ===
+    if config:
+        with open(config, 'r', encoding='utf-8') as f:
+            user_config = json.load(f)
+        # Добавляем или обновляем настройку источника данных
+        if 'data_source' not in user_config:
+            user_config['data_source'] = {}
+        user_config['data_source']['patient_info_source'] = patient_source
+        
+        # Сохраняем временный конфиг
+        temp_config = Path('temp_config.json')
+        with open(temp_config, 'w', encoding='utf-8') as f:
+            json.dump(user_config, f, ensure_ascii=False, indent=2)
+        config_path = temp_config
+        is_temp_config = True
+    else:
+        # Создаем минимальный конфиг с настройкой источника
+        temp_config = Path('temp_config.json')
+        with open(temp_config, 'w', encoding='utf-8') as f:
+            json.dump({
+                'data_source': {
+                    'patient_info_source': patient_source
+                }
+            }, f, ensure_ascii=False, indent=2)
+        config_path = temp_config
+        is_temp_config = True
     
-    # Создаем движок
-    config_path = Path(config) if config else None
+    logger.info(f"Запуск парсинга: {input_path}")
+    logger.info(f"Источник данных пациента: {patient_source}")
+    
+    # Создаем движок с конфигом (включая настройку источника данных)
     engine = LabXtractEngine(config_path)
     
     input_path = Path(input_path)
@@ -68,6 +93,10 @@ def parse(input_path, output, format, config, verbose):
     else:
         logger.info(f"Обработка директории: {input_path}")
         reports = engine.process_directory(input_path)
+    
+    # Удаляем временный конфиг если создавали
+    if 'is_temp_config' in locals() and is_temp_config and temp_config.exists():
+        temp_config.unlink()
     
     if not reports:
         logger.error("Не удалось извлечь данные из файлов")
@@ -108,12 +137,37 @@ def parse(input_path, output, format, config, verbose):
         for i, report in enumerate(reports)
     ))
     
+    # Статистика по источникам данных
+    source_stats = {}
+    for report in reports:
+        source = "unknown"
+        if report.patient.full_name:
+            # Проверяем, откуда взялись данные
+            test_patient = PatientInfo()
+            if test_patient.from_filename(report.source_file):
+                if test_patient.full_name == report.patient.full_name:
+                    source = "filename"
+            elif test_patient.from_sheet_name(report.sheet_name):
+                if test_patient.full_name == report.patient.full_name:
+                    source = "sheet_name"
+            else:
+                source = "manual"  # Введены вручную или другой источник
+        
+        source_stats[source] = source_stats.get(source, 0) + 1
+    
     click.echo(f"\n📊 Сводка:")
     click.echo(f"  Обработано файлов: {1 if input_path.is_file() else 'несколько'}")
     click.echo(f"  Найдено отчетов: {len(reports)}")
     click.echo(f"  Уникальных пациентов: {total_patients}")
     click.echo(f"  Всего тестов: {total_tests}")
     click.echo(f"  Аномальных тестов: {sum(report.abnormal_tests for report in reports)}")
+    click.echo(f"  Источник данных пациента: {patient_source}")
+    
+    if source_stats:
+        click.echo(f"  Распределение источников:")
+        for source, count in source_stats.items():
+            click.echo(f"    - {source}: {count} отчетов")
+    
     click.echo(f"  Результаты сохранены в: {output_dir}")
     
     if success:
@@ -179,7 +233,6 @@ def analyze(file_path, sheet):
                 click.echo(f"       Содержимое: {row_preview}...")
         
         # Парсим информацию о пациенте из названия листа
-        from labxtract.core.models import PatientInfo
         patient = PatientInfo()
         if patient.from_sheet_name(sheet_to_analyze):
             click.echo(f"\n👤 Информация о пациенте из названия листа:")
@@ -192,6 +245,16 @@ def analyze(file_path, sheet):
                 click.echo(f"  Дата рождения: {patient.birth_date.strftime('%d.%m.%Y')}")
             if patient.age:
                 click.echo(f"  Возраст: {patient.age}")
+        
+        # Также пробуем из имени файла
+        patient_from_file = PatientInfo()
+        if patient_from_file.from_filename(file_path.name):
+            click.echo(f"\n👤 Информация о пациенте из имени файла:")
+            click.echo(f"  ФИО: {patient_from_file.full_name}")
+            if patient_from_file.birth_date:
+                click.echo(f"  Дата рождения: {patient_from_file.birth_date.strftime('%d.%m.%Y')}")
+            if patient_from_file.age:
+                click.echo(f"  Возраст: {patient_from_file.age}")
         
     except Exception as e:
         click.echo(f"❌ Ошибка при анализе файла: {e}")
@@ -213,6 +276,9 @@ def create_config(config_file, overwrite):
         sys.exit(1)
     
     default_config = {
+        "data_source": {
+            "patient_info_source": "auto"
+        },
         "parser": {
             "keywords": {
                 "test_name": ["показатель", "анализ", "название", "test"],
@@ -249,7 +315,11 @@ def create_config(config_file, overwrite):
             json.dump(default_config, f, ensure_ascii=False, indent=2)
         
         click.echo(f"✅ Файл конфигурации создан: {config_path}")
-        click.echo("Вы можете отредактировать его для настройки парсера.")
+        click.echo(f"📋 Настройки по умолчанию:")
+        click.echo(f"  • Источник данных пациента: {default_config['data_source']['patient_info_source']}")
+        click.echo(f"  • Ключевые слова для парсера: {len(default_config['parser']['keywords'])} категорий")
+        click.echo(f"  • Формат вывода: CSV, JSON, Excel")
+        click.echo("\nВы можете отредактировать этот файл для настройки парсера.")
         
     except Exception as e:
         click.echo(f"❌ Ошибка при создании конфигурации: {e}")

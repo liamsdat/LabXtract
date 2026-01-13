@@ -359,6 +359,78 @@ class PatientInfo:
         }
         
         return {k: v for k, v in result.items() if v is not None}
+    
+    
+    def from_filename(self, filename: str) -> bool:
+        """
+        Извлекает информацию о пациенте из имени файла
+        Примеры: 
+        - "Иванов Иван Иванович 25.04.2005.xlsx"
+        - "Петров Петр 15.03.1990.xls"
+        - "Сидорова Анна Сергеевна.xlsx"
+        """
+        if not filename:
+            return False
+        
+        # Убираем расширение файла
+        from pathlib import Path
+        filename_without_ext = Path(filename).stem
+        
+        # Пробуем разные паттерны
+        patterns = [
+            # Фамилия Имя Отчество ДД.ММ.ГГГГ
+            r'^(?P<last_name>[А-Я][а-я]+)\s+(?P<first_name>[А-Я][а-я]+)\s+(?P<middle_name>[А-Я][а-я]+)\s+(?P<birth_date>\d{2}\.\d{2}\.\d{4})$',
+            
+            # Фамилия Имя ДД.ММ.ГГГГ
+            r'^(?P<last_name>[А-Я][а-я]+)\s+(?P<first_name>[А-Я][а-я]+)\s+(?P<birth_date>\d{2}\.\d{2}\.\d{4})$',
+            
+            # Фамилия И.О. ДД.ММ.ГГГГ
+            r'^(?P<last_name>[А-Я][а-я]+)\s+(?P<first_name>[А-Я])\.\s*(?P<middle_name>[А-Я])\.?\s*(?P<birth_date>\d{2}\.\d{2}\.\d{4})?$',
+            
+            # Только ФИО (без даты)
+            r'^(?P<last_name>[А-Я][а-я]+)\s+(?P<first_name>[А-Я][а-я]+)\s+(?P<middle_name>[А-Я][а-я]+)$',
+            
+            # Фамилия Имя (без отчества и даты)
+            r'^(?P<last_name>[А-Я][а-я]+)\s+(?P<first_name>[А-Я][а-я]+)$',
+        ]
+        
+        import re
+        from datetime import datetime
+        
+        for pattern in patterns:
+            match = re.match(pattern, filename_without_ext.strip())
+            if match:
+                groups = match.groupdict()
+                
+                # Собираем ФИО
+                name_parts = []
+                if groups.get('last_name'):
+                    name_parts.append(groups['last_name'])
+                if groups.get('first_name'):
+                    name_parts.append(groups['first_name'])
+                if groups.get('middle_name'):
+                    name_parts.append(groups['middle_name'])
+                
+                self.full_name = ' '.join(name_parts)
+                self.last_name = groups.get('last_name')
+                self.first_name = groups.get('first_name')
+                self.middle_name = groups.get('middle_name')
+                
+                # Парсим дату рождения
+                birth_date_str = groups.get('birth_date')
+                if birth_date_str:
+                    try:
+                        self.birth_date = datetime.strptime(birth_date_str, '%d.%m.%Y')
+                        self._calculate_age()
+                    except ValueError:
+                        pass
+                
+                return True
+        
+        # Если не удалось распарсить, сохраняем имя файла как ФИО
+        self.full_name = filename_without_ext
+        return False
+
 
 
 @dataclass
